@@ -1,0 +1,221 @@
+//
+// Copyright 2020, Offchain Labs, Inc. All rights reserved.
+//
+
+
+use std::bytearray::ByteArray;
+use std::bytestream::ByteStream;
+use std::bytearray::MarshalledBytes;
+use accounts::AccountStore;
+use accounts::Account;
+use evmlogs::EvmLogs;
+use std::storageMap::StorageMap;
+
+use accounts::getGlobalAccountStore;
+use accounts::setGlobalAccountStore;
+use accounts::accountStore_get;
+use accounts::accountStore_set;
+use accounts::accountStore_transferEthBalance;
+use accounts::accountStore_createAccountFromEvmCode;
+use accounts::account_checkAndIncrSeqNum;
+use accounts::account_fetchAndIncrSeqNum;
+use accounts::account_hasContract;
+
+use accounts::account_incrSeqNum;
+use accounts::account_getNextSeqNum;
+use accounts::account_addToEthBalance;
+use accounts::account_getStartCodePoint;
+
+use evmCallStack::initEvmCallStack;
+use evmCallStack::initEvmCallStackForConstructor;
+use evmCallStack::evmCallStack_runningCodeFromAccount;
+
+use gasAccounting::GasUsage;
+use gasAccounting::TxFeeStats;
+
+use output::emitTxReceipt;
+
+use retrybuffer::RetryableTx;
+
+use std::bytearray::bytearray_new;
+use std::bytearray::bytearray_size;
+use std::bytearray::bytearray_extract;
+
+use std::bytestream::bytestream_new;
+use std::bytestream::bytestream_getByte;
+use std::bytestream::bytestream_get256;
+use std::bytestream::bytestream_skipBytes;
+use std::bytestream::bytestream_getRemainingBytes;
+
+use std::rlp::keccakOfRlpEncodedUintPair;
+
+use codeSegment::translateEvmCodeSegment;
+
+use inbox::IncomingRequest;
+
+use gasAccounting::GasUsage;
+
+
+public impure func handleL1Request(
+    msg: IncomingRequest
+) -> option<()> {   // return None if error; otherwise return Some(()) or do a tx and never return from here
+    // Parse an incoming message and do appropriate computations
+    let inStream = bytestream_new(msg.msgData);
+
+    return xif (msg.kind == const::L1MessageType_ethDeposit) {
+        // ethdeposit message
+        let (bs, destination) = bytestream_get256(inStream)?;
+        inStream = bs;
+
+        let (bs, amount) = bytestream_get256(inStream)?;
+        inStream = bs;
+
+        let globalAS = getGlobalAccountStore();
+        let destAccount = accountStore_get(globalAS, address(destination));
+        destAccount = account_addToEthBalance(destAccount, amount);
+        setGlobalAccountStore(
+            accountStore_set(
+                globalAS,
+                address(destination),
+                destAccount
+            )
+        );
+        Some(())
+    } else {
+        // not a valid message type
+        // (This should not have been called if msg.kind == const::L1MessageType_L2.)
+        None<()>
+    };
+}
+
+impure func verifyAndIncrSequenceNum(addr: address, seqNum: uint) -> option<()> {
+    // Verify the sequence number on a message.
+    // If it matches, increment the next expected seq num, and return Some(()).
+    // Else, change nothing and return None.
+    let globalAS = getGlobalAccountStore();
+    setGlobalAccountStore(
+        accountStore_set(
+            globalAS,
+            addr,
+            account_checkAndIncrSeqNum(
+                accountStore_get(globalAS, addr),
+                seqNum
+            )?
+        )
+    );
+    return Some(());
+}
+
+impure func fetchAndIncrSequenceNum(addr: address) -> uint {
+    // Fetch sequence number, and increment it
+    let globalAS = getGlobalAccountStore();
+    let (ret, updatedAcct) = account_fetchAndIncrSeqNum(
+        accountStore_get(globalAS, addr)
+    );
+    setGlobalAccountStore(
+        accountStore_set(
+            globalAS,
+            addr,
+            updatedAcct
+        )
+    );
+    return ret;
+}
+
+type TxRequestData = struct {
+    maxGas: uint,
+    gasPrice: uint,
+    seqNum: option<uint>,
+    caller: address,
+    calleeAddr: address,
+    gasPayer: address,
+    value: uint,
+    calldata: ByteArray,
+    nonMutating: bool,
+    isConstructor: bool,
+    incomingRequest: IncomingRequest,
+    feeStats: TxFeeStats,
+    fromRetryable: option<RetryableTx>,
+}
+
+public impure func handleL2Request(
+    inStream: ByteStream,
+    request: TxRequestData
+) -> option<()> {   // return None if message is malformatted; otherwise handle errors and return Some(()); if no error, never return
+    if let Some(sequenceNum) = request.seqNum {
+        if (account_getNextSeqNum(
+                accountStore_get(getGlobalAccountStore(), request.caller)
+            ) != sequenceNum) {
+            // bad sequence number error
+            emitTxReceipt(
+                request.incomingRequest,
+                const::TxResultCode_badSequenceNum,
+                None<ByteArray>,
+                None<EvmLogs>,
+                None<GasUsage>,
+                request.feeStats,
+            );
+            return Some(());
+        }
+    }
+
+    if (request.calleeAddr == address(0)) {
+        // this is a constructor call
+        if (request.nonMutating) {
+            // revert error (tried to call constructor in a non-mutating call)
+            emitTxReceipt(
+                request.incomingRequest,
+                const::TxResultCode_revert,
+                None<ByteArray>,
+                None<EvmLogs>,
+                None<GasUsage>,
+                request.feeStats,
+            );
+            return Some(());
+        }
+
+        let codeBytes = request.calldata;
+        request = request with { calldata: bytearray_new(0) };
+        let (codept, evmJumpTable, _) = translateEvmCodeSegment(bytestream_new(codeBytes), false)?;
+
+        if (request.seqNum == None<uint>) {
+            request = request with { seqNum: Some(fetchAndIncrSequenceNum(request.caller)) };
+        }
+
+        request = request with {
+            calleeAddr: address(keccakOfRlpEncodedUintPair(uint(request.caller), request.seqNum?))
+        };
+
+        if (account_hasContract(accountStore_get(getGlobalAccountStore(), request.calleeAddr))) {
+            // there's already an account at that address, revert the call
+            // should never happen -- this is just defensive code
+            emitTxReceipt(
+                request.incomingRequest,
+                const::TxResultCode_cannotDeployAtAddress,
+                None<ByteArray>,
+                None<EvmLogs>,
+                None<GasUsage>,
+                request.feeStats,
+            );
+            return Some(());
+        } else {
+            initEvmCallStackForConstructor(
+                codeBytes,
+                evmJumpTable,
+                codept,
+                request,
+                true,
+            );  // should never return
+        }
+    } else {
+        // this is a non-constructor call
+        let callKind = const::EVMCallType_call;
+        if (request.nonMutating) {
+            callKind = const::EVMCallType_staticcall;
+        }
+
+        initEvmCallStack(callKind, request, None<ByteArray>, true);  // should never return
+    }
+
+    return panic;   // this should never be reached
+}

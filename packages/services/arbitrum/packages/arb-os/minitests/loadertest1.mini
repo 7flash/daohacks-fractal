@@ -1,0 +1,7 @@
+//
+// Copyright 2020, Offchain Labs, Inc. All rights reserved.
+//
+
+public func main() {
+    asm(777,) { log };
+}

@@ -1,0 +1,152 @@
+//
+// Copyright 2020, Offchain Labs, Inc. All rights reserved.
+//
+
+use core::kvs::Kvs;
+use core::kvs::builtin_kvsNew;
+use core::kvs::builtin_kvsGet;
+use core::kvs::builtin_kvsSet;
+use core::kvs::builtin_kvsDelete;
+use core::kvs::builtin_kvsForall;
+use core::kvs::builtin_kvsSize;
+
+impure func main() {
+	asm(tests(),) { log };
+}
+
+impure func tests() -> uint {
+	let s = builtin_kvsNew();
+	if (builtin_kvsGet(s, 17) != None<any>) {
+		return 1;
+	}
+	if (builtin_kvsSize(s) != 0) {
+	    return 101;
+	}
+
+	s = builtin_kvsNew();
+	s = builtin_kvsSet(s, 42, 42);
+	if (builtin_kvsGet(s, 42) != Some(unsafecast<any>(42))) {
+		return 2;
+	}
+	if (builtin_kvsSize(s) != 1) {
+	    return 102;
+	}
+	s = builtin_kvsNew();
+	s = builtin_kvsSet(s, 42, 43);
+	s = builtin_kvsSet(s, 55, 56);
+	s = builtin_kvsSet(s, 42, 99);
+	if (builtin_kvsGet(s, 42) != Some(unsafecast<any>(99))) {
+		return 3;
+	}
+	if (builtin_kvsSize(s) != 2) {
+	    return 103;
+	}
+
+	s = builtin_kvsNew();
+	s = builtin_kvsSet(s, 42, 43);
+	s = builtin_kvsSet(s, 55, 56);
+	s = builtin_kvsSet(s, 42, 99);
+	if (builtin_kvsGet(s, 55) != Some(unsafecast<any>(56))) {
+		return 4;
+	}
+	if (builtin_kvsSize(s) != 2) {
+	    return 104;
+	}
+
+	s = builtin_kvsNew();
+	let i = 0;
+	while (i < 41) {
+		s = builtin_kvsSet(s, i, 1000+i);
+		i = i+1;
+	}
+	if (builtin_kvsGet(s, 17) != Some(unsafecast<any>(1017))) {
+		return 5;
+	}
+	if (builtin_kvsSize(s) != 41) {
+	    return 105;
+	}
+
+	s = builtin_kvsNew();
+	let i = 0;
+	while (i < 27) {
+		s = builtin_kvsSet(s, i, 1000+i);
+		i = i+1;
+	}
+	s = builtin_kvsDelete(s, 17);
+	if (builtin_kvsGet(s, 17) != None<any>) {
+		return 6;
+	}
+	if (builtin_kvsSize(s) != 26) {
+	    return 106;
+	}
+
+	s = builtin_kvsNew();
+	s = builtin_kvsSet(s, 42, 43);
+	s = builtin_kvsSet(s, 55, 56);
+	s = builtin_kvsSet(s, 42, 99);
+	if (builtin_kvsGet(s, 42) != Some(unsafecast<any>(99))) {
+		return 7;
+	}
+	if (builtin_kvsSize(s) != 2) {
+	    return 107;
+	}
+
+	s = builtin_kvsNew();
+	s = builtin_kvsSet(s, 42, 43);
+	s = builtin_kvsSet(s, 55, 56);
+	s = builtin_kvsSet(s, 42, 99);
+	if (builtin_kvsGet(s, 3) != None<any>) {
+		return 8;
+	}
+	if (builtin_kvsSize(s) != 2) {
+	    return 108;
+	}
+
+	s = builtin_kvsNew();
+	s = builtin_kvsSet(s, 42, 43);
+	s = builtin_kvsSet(s, 55, 56);
+	s = builtin_kvsSet(s, 42, 99);
+	let rawResult = builtin_kvsForall(s, sumForKvsIterator, 0);
+	if (unsafecast<uint>(rawResult) != 155) {
+		return 9;
+	}
+	if (builtin_kvsSize(s) != 2) {
+	    return 109;
+	}
+
+    // regression test for bug #73
+    s = builtin_kvsNew();
+    s = builtin_kvsSet(s, 42, 43);
+    s = builtin_kvsSet(s, 55, 56);
+    s = builtin_kvsDelete(s, 42);
+    s = builtin_kvsSet(s, 55, 100);
+    s = builtin_kvsDelete(s, 55);
+    if (builtin_kvsGet(s, 55) != None<any>) {
+        return 10;
+    }
+	if (builtin_kvsSize(s) != 0) {
+	    return 110;
+	}
+
+	return 0;
+}
+
+func isSome(x: option<any>) -> bool {
+	return xif let Some(unused) = x {
+		true
+	} else {
+		false
+	};
+}
+
+func getSomeOr(x: option<any>, backupVal: any) -> any {
+	return xif let Some(val) = x {
+		val
+	} else {
+		backupVal
+	};
+}
+
+func sumForKvsIterator(key: any, value: any, state: any) -> any {
+	return unsafecast<uint>(value) + unsafecast<uint>(state);
+}

@@ -1,0 +1,170 @@
+//
+// Copyright 2020, Offchain Labs, Inc. All rights reserved.
+//
+
+type BoundedQueue = struct {
+    capacity: uint,
+    nextPut: uint,
+    nextGet: uint,
+    contents: []any,
+}
+
+public func boundedQueue_new(capacity: uint) -> BoundedQueue {
+    return struct {
+        capacity: capacity,
+        nextPut: 0,
+        nextGet: 0,
+        contents: newarray<any>(capacity),
+    };
+}
+
+public func boundedQueue_isEmpty(q: BoundedQueue) -> bool {
+    return q.nextPut == q.nextGet;
+}
+
+public func boundedQueue_isFull(q: BoundedQueue) -> bool {
+    return ((q.nextPut+1) % q.capacity) == q.nextGet;
+}
+
+public func boundedQueue_size(q: BoundedQueue) -> uint {
+    return (q.nextPut + q.capacity - q.nextGet) % q.capacity;
+}
+
+public func boundedQueue_put(q: BoundedQueue, val: any) -> BoundedQueue {
+    return xif (boundedQueue_isFull(q)) {
+        q
+    } else {
+        let putIndex = q.nextPut;
+        q with { nextPut: (putIndex+1) % q.capacity }
+            with { contents: q.contents with { [putIndex] = val } }
+    };
+}
+
+public func boundedQueue_get(q: BoundedQueue) -> option<(BoundedQueue, any)> {
+    return xif (boundedQueue_isEmpty(q)) {
+        None<(BoundedQueue, any)>
+    } else {
+        Some((
+            q with { nextGet: (q.nextGet+1) % q.capacity },
+            q.contents[q.nextGet],
+        ))
+    };
+}
+
+public func boundedQueue_nth(q: BoundedQueue, n: uint) -> option<any> {
+    return xif (n < boundedQueue_size(q)) {
+        Some(q.contents[(q.nextGet + n) % q.capacity])
+    } else {
+        None<any>
+    };
+}
+
+public func boundedQueue_set_nth(q: BoundedQueue, n: uint, value: any) -> option<BoundedQueue> {
+    return xif (n < boundedQueue_size(q)) {
+        Some(q with { contents: q.contents with { [(q.nextGet + n) % q.capacity] = value } })
+    } else {
+        None<BoundedQueue>
+    };
+}
+
+public func boundedQueue_expand(q: BoundedQueue, newSize: uint) -> BoundedQueue {
+    if (newSize <= q.capacity) {
+        panic;
+    }
+    let newQ = boundedQueue_new(newSize);
+    while ( ! boundedQueue_isEmpty(q) ) {
+        if let Some(res) = boundedQueue_get(q) {
+            q = res.0;
+            newQ = boundedQueue_put(newQ, res.1);
+        } else {
+            panic;
+        }
+    }
+    return newQ;
+}
+
+type Queue = BoundedQueue
+
+public func queue_new() -> Queue {
+    return boundedQueue_new(8);
+}
+
+public func queue_isEmpty(q: Queue) -> bool {
+    return boundedQueue_isEmpty(q);
+}
+
+public func queue_size(q: Queue) -> uint {
+    return boundedQueue_size(q);
+}
+
+public func queue_put(q: Queue, val: any) -> Queue {
+    if (boundedQueue_isFull(q)) {
+        q = boundedQueue_expand(q, 2*q.capacity);
+    }
+    return boundedQueue_put(q, val);
+}
+
+public func queue_get(q: Queue) -> option<(Queue, any)> {
+    return boundedQueue_get(q);
+}
+
+public func queue_getOrDie(q: Queue) -> (Queue, any) {
+    return xif let Some(res) = queue_get(q) {
+        res
+    } else {
+        panic
+    };
+}
+
+public func queue_nth(q: Queue, n: uint) -> option<any> {
+    return boundedQueue_nth(q, n);
+}
+
+public func queue_set_nth(q: Queue, n: uint, value: any) -> option<Queue> {
+    return boundedQueue_set_nth(q, n, value);
+}
+
+public func queue_discardOne(q: Queue) -> Queue {
+    // return q with first item removed; if no first item, return it q unmodified
+    return xif let Some(res) = queue_get(q) {
+        res.0
+    } else {
+        q
+    };
+}
+
+type QueueStack = option<any>
+type QueueStackCell = struct {
+    head: Queue,
+    rest: QueueStack,
+}
+
+public func queuestack_new() -> QueueStack {
+    return None<any>;
+}
+
+public func queuestack_push(qs: QueueStack, q: Queue) -> QueueStack {
+    return Some(
+        unsafecast<any>(
+            struct {
+                head: q,
+                rest: qs,
+            }
+        )
+    );
+}
+
+public func queuestack_get(qs: QueueStack) -> option<(QueueStack, any)> {
+    return xloop {
+        let cell = unsafecast<QueueStackCell>(qs?);
+        if let Some(res) = queue_get(cell.head) {
+            let (uq, item) = res;
+            return Some((
+                queuestack_push(cell.rest, uq),
+                item
+            ));
+        } else {
+            qs = cell.rest;
+        }
+    };
+}

@@ -1,0 +1,34 @@
+{
+  "name": "optimism",
+  "version": "1.0.0",
+  "author": "Optimism PBC",
+  "license": "MIT",
+  "workspaces": {
+      "packages": [
+          "packages/*",
+          "l2geth",
+          "integration-tests",
+          "specs"
+      ],
+        "nohoist": ["examples/*"]
+  },
+  "private": true,
+  "devDependencies": {
+    "lerna": "^4.0.0",
+    "patch-package": "^6.4.7"
+  },
+  "scripts": {
+    "clean": "yarn lerna run clean",
+    "build": "yarn lerna run build",
+    "test": "yarn lerna run test --parallel",
+    "test:coverage": "yarn lerna run test:coverage --parallel",
+    "lint": "yarn lerna run lint",
+    "lint:check": "yarn lerna run lint:check",
+    "lint:fix": "yarn lerna run lint:fix",
+    "postinstall": "patch-package",
+    "release": "yarn build && yarn changeset publish"
+  },
+  "dependencies": {
+    "@changesets/cli": "^2.16.0"
+  }
+}

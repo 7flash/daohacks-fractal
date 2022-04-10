@@ -1,0 +1,120 @@
+//
+// Copyright 2020, Offchain Labs, Inc. All rights reserved.
+//
+
+use std::bytearray::ByteArray;
+use std::bytearray::bytearray_new;
+use std::bytearray::bytearray_size;
+use std::bytearray::bytearray_getByte;
+use std::bytearray::bytearray_get64;
+use std::bytearray::bytearray_get256;
+use std::bytearray::bytearray_extract;
+use std::bytearray::bytearray_buffer;
+use std::bytearray::bytearray_slice;
+use std::bytearray::bytearray_wrap_slice;
+
+
+type ByteStream = struct {
+    buf: buffer,
+    capacity: uint,
+    slice: uint,
+    currentOffset: uint,
+}
+
+public func bytestream_new(contents: ByteArray) -> ByteStream {
+    return struct {
+        buf: bytearray_buffer(contents),
+        capacity: bytearray_size(contents),
+        slice: bytearray_slice(contents),
+        currentOffset: 0,
+    };
+}
+
+public func bytestream_atEof(bs: ByteStream) -> bool {
+    return bs.currentOffset >= bs.capacity;
+}
+
+public func bytestream_bytesReadSoFar(bs: ByteStream) -> uint {
+    return bs.currentOffset;
+}
+
+public func bytestream_bytesRemaining(bs: ByteStream) -> uint {
+    return xif (bs.currentOffset >= bs.capacity) {
+        0
+    } else {
+        bs.capacity - bs.currentOffset
+    };
+}
+
+public func bytestream_skipBytes(bs: ByteStream, nbytes: uint) -> option<ByteStream> {
+    let newOffset = bs.currentOffset + nbytes;
+    return xif (newOffset <= bs.capacity) {
+        Some(bs with { currentOffset: newOffset })
+    } else {
+        None<ByteStream>
+    };
+}
+
+public func bytestream_truncate(bs: ByteStream, size: uint) -> ByteStream {
+    return xif (size < bs.capacity) {
+        xif (size < bs.currentOffset) {
+            bs with { capacity: bs.currentOffset }
+        } else {
+            bs with { capacity: size }
+        }
+    } else {
+        bs
+    };
+}
+
+public func bytestream_getByte(bs: ByteStream) -> option<(ByteStream, uint)> {
+    return xif (bs.currentOffset >= bs.capacity) {
+        None<(ByteStream, uint)>
+    } else {
+        Some((
+            bs with { currentOffset: bs.currentOffset+1 },
+            getbuffer8(bs.buf, bs.currentOffset+bs.slice)
+        ))
+    };
+}
+
+public func bytestream_get64(bs: ByteStream) -> option<(ByteStream, uint)> {
+    return xif (bs.currentOffset+8 > bs.capacity) {
+        None<(ByteStream, uint)>
+    } else {
+        Some((
+            bs with { currentOffset: bs.currentOffset+8 },
+            getbuffer64(bs.buf, bs.currentOffset+bs.slice)
+        ))
+    };
+}
+
+public func bytestream_get256(bs: ByteStream) -> option<(ByteStream, uint)> {
+    return xif (bs.currentOffset+32 > bs.capacity) {
+        None<(ByteStream, uint)>
+    } else {
+        Some((
+            bs with { currentOffset: bs.currentOffset+32 },
+            getbuffer256(bs.buf, bs.currentOffset+bs.slice)
+        ))
+    };
+}
+
+public func bytestream_getN(bs: ByteStream, nbytes: uint) -> option<(ByteStream, ByteArray)> {
+    if (bs.currentOffset + nbytes > bs.capacity) {
+        return None;
+    }
+
+    return Some((
+        bs with { currentOffset: bs.currentOffset + nbytes },
+        bytearray_wrap_slice(bs.buf, bs.currentOffset + bs.slice, nbytes)
+    ));
+}
+
+public func bytestream_getRemainingBytes(bs: ByteStream) -> ByteArray {
+    return xif (bs.capacity > bs.currentOffset) {
+        bytearray_wrap_slice(bs.buf, bs.currentOffset + bs.slice, bs.capacity - bs.currentOffset)
+    } else {
+        bytearray_new(0)
+    };
+}
